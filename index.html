@@ -48,6 +48,7 @@
     }
 
     #todoInput:focus { border-color: #6c63ff; }
+    #todoInput:disabled { background: #f5f5f5; }
 
     #addBtn {
       padding: 12px 20px;
@@ -58,12 +59,13 @@
       font-size: 1rem;
       font-weight: 600;
       cursor: pointer;
-      transition: background 0.2s, transform 0.1s;
+      transition: background 0.2s, transform 0.1s, opacity 0.2s;
       white-space: nowrap;
     }
 
-    #addBtn:hover { background: #574fd6; }
-    #addBtn:active { transform: scale(0.97); }
+    #addBtn:hover:not(:disabled) { background: #574fd6; }
+    #addBtn:active:not(:disabled) { transform: scale(0.97); }
+    #addBtn:disabled { opacity: 0.6; cursor: not-allowed; }
 
     .filter-row {
       display: flex;
@@ -95,6 +97,7 @@
       color: #888;
       margin-bottom: 12px;
       text-align: right;
+      min-height: 1.2em;
     }
 
     #todoList {
@@ -112,7 +115,7 @@
       padding: 14px 16px;
       border-radius: 12px;
       box-shadow: 0 1px 4px rgba(0,0,0,0.07);
-      transition: opacity 0.2s, box-shadow 0.2s;
+      transition: opacity 0.2s;
       animation: slideIn 0.2s ease;
     }
 
@@ -122,6 +125,7 @@
     }
 
     .todo-item.done { opacity: 0.5; }
+    .todo-item.busy { opacity: 0.4; pointer-events: none; }
 
     .todo-item input[type="checkbox"] {
       width: 20px;
@@ -136,7 +140,6 @@
       font-size: 1rem;
       color: #222;
       word-break: break-word;
-      transition: text-decoration 0.2s, color 0.2s;
     }
 
     .todo-item.done .todo-text {
@@ -164,6 +167,25 @@
       padding: 40px 0;
       font-size: 0.95rem;
     }
+
+    .skeleton {
+      background: #fff;
+      border-radius: 12px;
+      height: 52px;
+      animation: pulse 1.2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.4; }
+    }
+
+    .error-msg {
+      text-align: center;
+      color: #e74c3c;
+      padding: 20px 0;
+      font-size: 0.9rem;
+    }
   </style>
 </head>
 <body>
@@ -182,22 +204,36 @@
   </div>
 
   <div class="stats" id="stats"></div>
-
   <ul id="todoList"></ul>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
-  const input     = document.getElementById('todoInput');
-  const addBtn    = document.getElementById('addBtn');
-  const todoList  = document.getElementById('todoList');
-  const statsEl   = document.getElementById('stats');
+  const SUPABASE_URL = 'https://obayfbvbxlhyzimcbdgg.supabase.co';
+  const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9iYXlmYnZieGxoeXppbWNiZGdnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA1NDYxMDcsImV4cCI6MjA5NjEyMjEwN30.AR0fDeHwdiJfzmCuppji3CMREPCaDJS1i2e-6E176W4';
+
+  const client = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+  const input      = document.getElementById('todoInput');
+  const addBtn     = document.getElementById('addBtn');
+  const todoList   = document.getElementById('todoList');
+  const statsEl    = document.getElementById('stats');
   const filterBtns = document.querySelectorAll('.filter-btn');
 
-  let todos  = JSON.parse(localStorage.getItem('todos') || '[]');
+  let todos  = [];
   let filter = 'all';
+  let busy   = false;
 
-  function save() {
-    localStorage.setItem('todos', JSON.stringify(todos));
+  function setLoading(state) {
+    busy = state;
+    input.disabled  = state;
+    addBtn.disabled = state;
+  }
+
+  function showSkeleton() {
+    todoList.innerHTML = [1,2,3].map(() =>
+      '<li class="skeleton"></li>'
+    ).join('');
   }
 
   function updateStats() {
@@ -230,7 +266,7 @@
       cb.type = 'checkbox';
       cb.checked = todo.done;
       cb.setAttribute('aria-label', '완료 체크');
-      cb.addEventListener('change', () => toggleTodo(todo.id));
+      cb.addEventListener('change', () => toggleTodo(todo.id, todo.done));
 
       const span = document.createElement('span');
       span.className = 'todo-text';
@@ -249,25 +285,64 @@
     updateStats();
   }
 
-  function addTodo() {
-    const text = input.value.trim();
-    if (!text) { input.focus(); return; }
-    todos.unshift({ id: Date.now(), text, done: false });
-    input.value = '';
-    save();
+  async function loadTodos() {
+    showSkeleton();
+    const { data, error } = await client
+      .from('todo_items')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      todoList.innerHTML = '<li class="error-msg">데이터를 불러오지 못했습니다.</li>';
+      console.error(error);
+      return;
+    }
+    todos = data;
     render();
+  }
+
+  async function addTodo() {
+    const text = input.value.trim();
+    if (!text || busy) { input.focus(); return; }
+
+    setLoading(true);
+    const { error } = await client
+      .from('todo_items')
+      .insert({ text, done: false });
+    setLoading(false);
+
+    if (error) { console.error(error); return; }
+    input.value = '';
+    await loadTodos();
     input.focus();
   }
 
-  function toggleTodo(id) {
-    const t = todos.find(t => t.id === id);
-    if (t) { t.done = !t.done; save(); render(); }
+  async function toggleTodo(id, currentDone) {
+    if (busy) return;
+    const li = todoList.querySelector(`[data-id="${id}"]`);
+    if (li) li.classList.add('busy');
+
+    const { error } = await client
+      .from('todo_items')
+      .update({ done: !currentDone })
+      .eq('id', id);
+
+    if (error) { console.error(error); }
+    await loadTodos();
   }
 
-  function deleteTodo(id) {
-    todos = todos.filter(t => t.id !== id);
-    save();
-    render();
+  async function deleteTodo(id) {
+    if (busy) return;
+    const li = todoList.querySelector(`[data-id="${id}"]`);
+    if (li) li.classList.add('busy');
+
+    const { error } = await client
+      .from('todo_items')
+      .delete()
+      .eq('id', id);
+
+    if (error) { console.error(error); }
+    await loadTodos();
   }
 
   addBtn.addEventListener('click', addTodo);
@@ -282,7 +357,7 @@
     });
   });
 
-  render();
+  loadTodos();
 </script>
 </body>
 </html>
