@@ -1,0 +1,12 @@
+{
+  "name": "todo-project",
+  "version": "1.0.0",
+  "description": "Todo 일정관리 웹앱 - 추가/삭제/완료 체크 기능을 갖춘 단일 HTML 파일 앱",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  },
+  "license": "MIT"
+}
